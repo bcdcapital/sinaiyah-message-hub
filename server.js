@@ -89,7 +89,9 @@ const DEFAULT_CONTENT = {
   doctorPhoto: { url: "" }, // uploaded once, shown next to the day's schedule
   celebration: { photo: "", caption: "" }, // "Sinaiyah's Celebration Month" card
   gallery: [], // patient photo entries: { url, caption, addedAt }
-  staff: [] // staff entries: { url, name, role, addedAt }
+  staff: [], // staff entries: { url, name, role, addedAt }
+  doctors: [], // doctor entries: { url, name, specialty, addedAt }
+  ceoCorner: { url: "", name: "", title: "", message: "" }
 };
 
 function loadContent() {
@@ -278,7 +280,7 @@ const upload = multer({
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-staff-key');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -555,11 +557,18 @@ app.post('/api/content', requireStaff, (req, res) => {
    Body: field=doctorPhoto|celebration, optional caption, multipart photo. */
 app.post('/api/content/photo', requireStaff, upload.single('photo'), (req, res) => {
   const field = req.body.field;
-  if (!['doctorPhoto', 'celebration'].includes(field)) return res.status(400).json({ error: 'invalid field' });
+  if (!['doctorPhoto', 'celebration', 'ceoCorner'].includes(field)) return res.status(400).json({ error: 'invalid field' });
   if (!req.file) return res.status(400).json({ error: 'no photo uploaded' });
   const content = loadContent();
   const url = PUBLIC_BASE_URL + '/media/' + req.file.filename;
   if (field === 'doctorPhoto') content.doctorPhoto = { url };
+  else if (field === 'ceoCorner') {
+    content.ceoCorner = content.ceoCorner || {};
+    content.ceoCorner.url = url;
+    content.ceoCorner.name = (req.body.name || content.ceoCorner.name || '').slice(0, 80);
+    content.ceoCorner.title = (req.body.title || content.ceoCorner.title || '').slice(0, 80);
+    content.ceoCorner.message = (req.body.message || content.ceoCorner.message || '').slice(0, 600);
+  }
   else content.celebration = { photo: url, caption: (req.body.caption || content.celebration.caption || '').slice(0, 200) };
   saveContent(content);
   res.json({ ok: true, content });
@@ -622,10 +631,39 @@ app.delete('/api/content/staff/:index', requireStaff, (req, res) => {
   res.json({ ok: true, staff });
 });
 
+/* ── Doctors section ── same pattern as staff, own array so it renders
+   as its own "Meet Our Doctors" carousel, separate from general staff. */
+app.post('/api/content/doctors', requireStaff, upload.single('photo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no photo uploaded' });
+  const name = (req.body.name || '').slice(0, 80);
+  const specialty = (req.body.specialty || '').slice(0, 80);
+  if (!name) return res.status(400).json({ error: 'missing name' });
+  const content = loadContent();
+  content.doctors = content.doctors || [];
+  content.doctors.push({
+    url: PUBLIC_BASE_URL + '/media/' + req.file.filename,
+    name,
+    specialty,
+    addedAt: Date.now()
+  });
+  saveContent(content);
+  res.json({ ok: true, doctors: content.doctors });
+});
+
+app.delete('/api/content/doctors/:index', requireStaff, (req, res) => {
+  const i = parseInt(req.params.index, 10);
+  const content = loadContent();
+  const doctors = content.doctors || [];
+  if (i < 0 || i >= doctors.length) return res.status(404).json({ error: 'not found' });
+  const [removed] = doctors.splice(i, 1);
+  saveContent(content);
+  try { fs.unlinkSync(path.join(MEDIA_DIR, path.basename(removed.url))); } catch {}
+  res.json({ ok: true, doctors });
+});
+
 app.get('/health', (_req, res) => res.json({ ok: true, channels: ['web','facebook','viber','whatsapp','email','sms'] }));
 
 app.listen(PORT, () => {
   console.log('Sinaiyah omnichannel hub on http://localhost:' + PORT);
   console.log('Public base for media:', PUBLIC_BASE_URL);
 });
-
